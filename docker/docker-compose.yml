@@ -1,0 +1,151 @@
+# =============================================================================
+# Chuck's AI Stack -- Docker Compose
+# Services: n8n, ChromaDB, Redis
+# =============================================================================
+# Usage:
+#   First run:  copy .env.template to .env and fill in values
+#   Start:      docker compose up -d
+#   Stop:       docker compose down
+#   Logs:       docker compose logs -f [service]
+#   Rebuild:    docker compose pull && docker compose up -d
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # n8n -- Workflow Automation
+  # UI: http://localhost:5678
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # --- Core ---
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: ${TIMEZONE:-America/Chicago}
+
+      # --- Security ---
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+
+      # --- Execution ---
+      EXECUTIONS_PROCESS: main
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: true
+
+      # --- Code Node -- allow filesystem and network access ---
+      NODE_FUNCTION_ALLOW_BUILTIN: "fs,path,crypto,http,https"
+      NODE_FUNCTION_ALLOW_EXTERNAL: "*"
+
+      # --- Logging ---
+      N8N_LOG_LEVEL: ${N8N_LOG_LEVEL:-info}
+
+      # --- Optional: Ollama base URL for AI nodes ---
+      # OLLAMA_BASE_URL: http://host.docker.internal:11434
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - ai-network
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # ChromaDB -- Vector Database
+  # API: http://localhost:8000
+  # ---------------------------------------------------------------------------
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/chroma
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chroma_data:/chroma/chroma
+    networks:
+      - ai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Redis -- Context Cache and Job Search State
+  # Port: 6379
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:latest
+    container_name: redis-cache
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - ai-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Ollama -- Local LLM (uncomment if running in Docker)
+  # By default Ollama runs locally on the host at port 11434.
+  # Uncomment this block only if you want it containerized instead.
+  # ---------------------------------------------------------------------------
+  # ollama:
+  #   image: ollama/ollama
+  #   container_name: ollama
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   networks:
+  #     - ai-network
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+# =============================================================================
+# Named Volumes -- data persists across container restarts and rebuilds
+# =============================================================================
+volumes:
+  n8n_data:
+    driver: local
+  chroma_data:
+    driver: local
+  redis_data:
+    driver: local
+  # ollama_data:
+  #   driver: local
+
+# =============================================================================
+# Network -- all services on a shared bridge network
+# =============================================================================
+networks:
+  ai-network:
+    driver: bridge
