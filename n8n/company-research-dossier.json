@@ -1,0 +1,879 @@
+{
+  "updatedAt": "2026-03-12T20:23:34.265Z",
+  "createdAt": "2026-02-25T21:27:36.953Z",
+  "id": "VRbHtlocU8JGtMKB",
+  "name": "Company Research Dossier",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "company-dossier",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        256,
+        256
+      ],
+      "webhookId": "bcf34e7c-c7a0-48c3-bb0c-88df3063c191"
+    },
+    {
+      "parameters": {
+        "jsCode": "var body = $input.first().json.body;\nvar company = (body.company || '').trim();\nvar slug = company.toLowerCase()\n  .replace(/[^a-z0-9\\s]/g, '')\n  .trim()\n  .replace(/\\s+/g, '-');\nreturn [{ json: {\n  company: company,\n  slug: slug,\n  redisKey: 'company:dossier:' + slug,\n  jobId: body.jobId || '',\n  jobTitle: body.jobTitle || '',\n  linkedinUrl: body.linkedinUrl || ''\n}}];"
+      },
+      "id": "prep-request",
+      "name": "Prepare Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "={{ $json.redisKey }}",
+        "options": {}
+      },
+      "id": "redis-get",
+      "name": "Get from Redis",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        704,
+        256
+      ],
+      "credentials": {
+        "redis": {
+          "id": "5FcrSFYwKg4fHXx6",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "var prep = $('Prepare Request').first().json;\nvar raw = Object.values($input.first().json)[0];\nvar dossier = null, isStale = true, exists = false;\n\nif (raw) {\n  try {\n    dossier = typeof raw === 'string' ? JSON.parse(raw) : raw;\n    exists = true;\n    var lastUpdated = dossier.lastUpdated ? new Date(dossier.lastUpdated) : null;\n    var daysSince = lastUpdated ? (new Date() - lastUpdated) / 86400000 : 999;\n    isStale = daysSince > 30;\n  } catch(e) { isStale = true; }\n}\n\nreturn [{ json: {\n  company: prep.company,\n  slug: prep.slug,\n  redisKey: prep.redisKey,\n  jobId: prep.jobId,\n  jobTitle: prep.jobTitle,\n  linkedinUrl: prep.linkedinUrl,\n  dossier: dossier,\n  exists: exists,\n  isStale: isStale,\n  cacheHit: exists && !isStale\n}}];"
+      },
+      "id": "check-cache",
+      "name": "Check Cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.cacheHit }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cache-fresh",
+      "name": "Cache Fresh?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var input = $input.first().json;\nvar dossier = JSON.parse(JSON.stringify(input.dossier));\nif (!dossier.jobsApplied) dossier.jobsApplied = [];\n\nvar alreadyAdded = dossier.jobsApplied.some(function(j) { return j.jobId === input.jobId; });\nif (!alreadyAdded && input.jobId) {\n  dossier.jobsApplied.push({\n    jobId: input.jobId,\n    title: input.jobTitle || 'Unknown',\n    linkedinUrl: input.linkedinUrl || '',\n    date: new Date().toISOString().slice(0, 10)\n  });\n}\n\nreturn [{ json: {\n  company: input.company,\n  slug: input.slug,\n  redisKey: input.redisKey,\n  dossierJson: JSON.stringify(dossier),\n  dossier: dossier,\n  source: 'cache'\n}}];"
+      },
+      "id": "update-jobs",
+      "name": "Update Jobs Applied",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $json.redisKey }}",
+        "value": "={{ $json.dossierJson }}"
+      },
+      "id": "redis-set-update",
+      "name": "Redis Set (Update)",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1600,
+        160
+      ],
+      "credentials": {
+        "redis": {
+          "id": "5FcrSFYwKg4fHXx6",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { dossier: $('Update Jobs Applied').first().json.dossier, source: 'cache', cached: true } }}",
+        "options": {}
+      },
+      "id": "respond-cached",
+      "name": "Respond (Cached)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1824,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var https = require('https');\nvar fs = require('fs');\nvar input = $input.first().json;\nvar slug = input.slug;\n\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\nvar liAt = config.li_at || '';\n\nfunction httpGet(hostname, path, headers) {\n  return new Promise(function(resolve, reject) {\n    var opts = { hostname: hostname, port: 443, path: path, method: 'GET',\n      headers: headers || { 'User-Agent': 'Mozilla/5.0' } };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() { resolve({ status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nvar linkedinData = {\n  employeeCount: 'Unknown',\n  industry: 'Unknown',\n  description: '',\n  linkedinUrl: 'https://www.linkedin.com/company/' + slug + '/'\n};\n\ntry {\n  var headers = { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' };\n  if (liAt) headers['Cookie'] = 'li_at=' + liAt;\n  var result = await httpGet('www.linkedin.com', '/company/' + slug + '/about/', headers);\n  if (result.status === 200) {\n    var html = result.text;\n    var empMatch = html.match(/\"employeeCountRange\":\\{\"start\":(\\d+),\"end\":(\\d+)\\}/);\n    if (empMatch) linkedinData.employeeCount = empMatch[1] + '-' + empMatch[2] + ' employees';\n    var indMatch = html.match(/\"industryName\":\"([^\"]+)\"/);\n    if (indMatch) linkedinData.industry = indMatch[1];\n    var descMatch = html.match(/\"description\":\"([^\"]{10,500})\"/);\n    if (descMatch) linkedinData.description = descMatch[1].replace(/\\\\n/g, ' ');\n  }\n} catch(e) { linkedinData.fetchError = e.message; }\n\nreturn [{ json: Object.assign({}, input, { linkedinData: linkedinData }) }];"
+      },
+      "id": "fetch-linkedin",
+      "name": "Fetch LinkedIn Company",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var https = require('https');\nvar fs = require('fs');\nvar input = $input.first().json;\nvar company = input.company;\n\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\nvar tavilyKey = config.tavily_api_key || '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';\n\nfunction tavilySearch(query) {\n  return new Promise(function(resolve, reject) {\n    var body = JSON.stringify({\n      api_key: tavilyKey, query: query, max_results: 5, include_answer: true\n    });\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(body, 'utf8') : body.length;\n    var opts = {\n      hostname: 'api.tavily.com', port: 443, path: '/search', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'Content-Length': bodyLen }\n    };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() {\n        try { resolve(JSON.parse(chunks.join(''))); }\n        catch(e) { resolve({ results: [], answer: '' }); }\n      });\n    });\n    req.on('error', function(e) { resolve({ results: [], answer: '', error: e.message }); });\n    req.write(body);\n    req.end();\n  });\n}\n\nvar tavilyData = { culture: null, news: null, error: null };\n\nif (tavilyKey) {\n  try {\n    var cultureRes = await tavilySearch('\"' + company + '\" company culture engineering team size employees');\n    var newsRes = await tavilySearch('\"' + company + '\" company news funding 2025 2026');\n    tavilyData.culture = {\n      answer: cultureRes.answer || '',\n      results: (cultureRes.results || []).slice(0, 3).map(function(r) {\n        return { title: r.title, url: r.url, snippet: (r.content || '').slice(0, 300) };\n      })\n    };\n    tavilyData.news = {\n      answer: newsRes.answer || '',\n      results: (newsRes.results || []).slice(0, 3).map(function(r) {\n        return { title: r.title, url: r.url, snippet: (r.content || '').slice(0, 300) };\n      })\n    };\n  } catch(e) { tavilyData.error = e.message; }\n} else {\n  tavilyData.error = 'No tavily_api_key found in ai-config.json';\n}\n\nreturn [{ json: Object.assign({}, input, { tavilyData: tavilyData }) }];"
+      },
+      "id": "search-tavily",
+      "name": "Search Tavily",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var https = require('https');\nvar http = require('http');\nvar fs = require('fs');\n\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\n\n// \u2500\u2500 CONFIG \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nvar CLAUDE_KEY = config.claude_api_key || '';\nvar CLAUDE_MODEL = config.claude_model || 'claude-opus-4-5-20251101';\nvar OLLAMA_MODEL = config.fallback_model || 'llama3.2';\nvar OLLAMA_HOST = config.ollama_host || 'host.docker.internal';\nvar OLLAMA_PORT = parseInt(config.ollama_port || '11434');\n// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nvar input = $input.first().json;\nvar company = input.company;\nvar slug = input.slug;\nvar jobId = input.jobId;\nvar jobTitle = input.jobTitle;\nvar linkedinUrl = input.linkedinUrl;\nvar linkedinData = input.linkedinData || {};\nvar tavilyData = input.tavilyData || {};\n\n// Build research context\nvar ctx = '';\nif (linkedinData.description) ctx += 'LinkedIn description: ' + linkedinData.description + '\\n\\n';\nif (linkedinData.industry && linkedinData.industry !== 'Unknown') ctx += 'Industry (LinkedIn): ' + linkedinData.industry + '\\n';\nif (linkedinData.employeeCount && linkedinData.employeeCount !== 'Unknown') ctx += 'Employee count: ' + linkedinData.employeeCount + '\\n\\n';\nif (tavilyData.culture && tavilyData.culture.answer) ctx += 'Culture research: ' + tavilyData.culture.answer + '\\n\\n';\nif (tavilyData.news && tavilyData.news.answer) ctx += 'Recent news: ' + tavilyData.news.answer + '\\n\\n';\nif (tavilyData.culture && tavilyData.culture.results) {\n  tavilyData.culture.results.forEach(function(r) { ctx += r.title + ': ' + r.snippet + '\\n'; });\n}\n\nfunction makeRequest(hostname, port, path, headers, body, useHttp) {\n  return new Promise(function(resolve, reject) {\n    var opts = { hostname: hostname, port: port, path: path, method: 'POST', headers: headers };\n    var lib = useHttp ? http : https;\n    var req = lib.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() { resolve({ status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\n\nasync function generate(systemPrompt, userPrompt) {\n  if (CLAUDE_KEY) {\n    try {\n      var cb = JSON.stringify({\n        model: CLAUDE_MODEL, max_tokens: 1024, system: systemPrompt,\n        messages: [{ role: 'user', content: userPrompt }]\n      });\n      var cbLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(cb, 'utf8') : cb.length;\n      var r = await makeRequest('api.anthropic.com', 443, '/v1/messages', {\n        'Content-Type': 'application/json', 'x-api-key': CLAUDE_KEY,\n        'anthropic-version': '2023-06-01', 'Content-Length': cbLen\n      }, cb, false);\n      if (r.status === 200) {\n        var p = JSON.parse(r.text);\n        return { text: p.content[0].text, model: CLAUDE_MODEL };\n      }\n    } catch(e) {}\n  }\n  var ob = JSON.stringify({ model: OLLAMA_MODEL, prompt: systemPrompt + '\\n\\n' + userPrompt, stream: false });\n  var obLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(ob, 'utf8') : ob.length;\n  var r = await makeRequest(OLLAMA_HOST, OLLAMA_PORT, '/api/generate', {\n    'Content-Type': 'application/json', 'Content-Length': obLen\n  }, ob, true);\n  var p = JSON.parse(r.text);\n  return { text: p.response, model: OLLAMA_MODEL };\n}\n\nvar SYSTEM = 'You are a company research assistant. Given research data, produce a structured JSON dossier about a company. Respond with ONLY valid JSON, no markdown, no explanation.';\nvar PROMPT = 'Company: ' + company + '\\n\\nResearch data:\\n' + (ctx || 'No research data available.') + '\\n\\nProduce a JSON object with exactly these fields:\\n{\\n  \"industry\": \"primary industry category\",\\n  \"size\": \"employee range e.g. 50-200 employees\",\\n  \"stage\": \"e.g. Series B, public, bootstrapped, unknown\",\\n  \"hq\": \"City, State/Country or unknown\",\\n  \"remote\": \"remote or hybrid or on-site or unknown\",\\n  \"cultureSignals\": [\"array of keywords\"],\\n  \"recentNews\": [\"array of news items as strings\"],\\n  \"glassdoorSignals\": [\"any sentiment signals from search results\"],\\n  \"researchNotes\": \"2-3 sentence narrative summary\"\\n}\\n\\nOutput ONLY the JSON object, no markdown.';\n\nvar fields = { industry:'Unknown', size:'Unknown', stage:'Unknown', hq:'Unknown', remote:'unknown',\n  cultureSignals:[], recentNews:[], glassdoorSignals:[], researchNotes:'' };\nvar usedModel = OLLAMA_MODEL;\n\ntry {\n  var result = await generate(SYSTEM, PROMPT);\n  usedModel = result.model;\n  var raw = result.text.trim()\n    .replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '');\n  Object.assign(fields, JSON.parse(raw));\n} catch(e) {\n  fields.researchNotes = 'Error generating dossier: ' + e.message;\n}\n\nvar today = new Date().toISOString().slice(0, 10);\nvar jobsApplied = [];\nif (jobId) jobsApplied.push({ jobId: jobId, title: jobTitle || 'Unknown', linkedinUrl: linkedinUrl || '', date: today });\n\nvar sources = tavilyData.error ? ['linkedin'] : ['tavily', 'linkedin'];\nsources.push('ai:' + usedModel);\n\nvar dossier = Object.assign({ company: company, slug: slug }, fields, {\n  linkedinUrl: linkedinData.linkedinUrl || 'https://www.linkedin.com/company/' + slug + '/',\n  jobsApplied: jobsApplied,\n  lastUpdated: today,\n  dataSourced: sources\n});\n\nreturn [{ json: {\n  company: company, slug: slug, redisKey: input.redisKey,\n  dossierJson: JSON.stringify(dossier), dossier: dossier\n}}];"
+      },
+      "id": "generate-dossier",
+      "name": "Generate Dossier",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2048,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "={{ $json.redisKey }}",
+        "value": "={{ $json.dossierJson }}"
+      },
+      "id": "redis-set-new",
+      "name": "Redis Set (New)",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        2272,
+        352
+      ],
+      "credentials": {
+        "redis": {
+          "id": "5FcrSFYwKg4fHXx6",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "var http = require('http');\nvar input = $input.first().json;\nvar dossier = input.dossier;\nvar slug = input.slug;\n\nvar CHROMA_HOST = 'host.docker.internal';\nvar CHROMA_PORT = 8000;\nvar COLLECTION = 'company-dossiers';\n\nfunction chromaReq(method, path, body) {\n  return new Promise(function(resolve, reject) {\n    var bodyStr = body ? JSON.stringify(body) : '';\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(bodyStr, 'utf8') : bodyStr.length;\n    var opts = {\n      hostname: CHROMA_HOST, port: CHROMA_PORT, path: '/api/v1' + path, method: method,\n      headers: { 'Content-Type': 'application/json', 'Content-Length': bodyLen }\n    };\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() {\n        try { resolve({ status: res.statusCode, data: JSON.parse(chunks.join('')) }); }\n        catch(e) { resolve({ status: res.statusCode, data: chunks.join('') }); }\n      });\n    });\n    req.on('error', function(e) { resolve({ status: 0, data: null, error: e.message }); });\n    if (bodyStr) req.write(bodyStr);\n    req.end();\n  });\n}\n\nvar chromaResult = { success: false, error: null, collectionId: null };\n\ntry {\n  // Use get_or_create directly \u2014 avoids brittle list-then-find pattern\n  // and works with both old (array) and new ({collections:[]}) Chroma API formats\n  var createRes = await chromaReq('POST', '/collections', { name: COLLECTION, get_or_create: true });\n  if ((createRes.status === 200 || createRes.status === 201) && createRes.data && createRes.data.id) {\n    chromaResult.collectionId = createRes.data.id;\n  } else {\n    chromaResult.error = 'get_or_create failed: HTTP ' + createRes.status + ' \u2014 ' + JSON.stringify(createRes.data).slice(0, 200);\n  }\n} catch(e) {\n  chromaResult.error = 'Collection error: ' + e.message;\n}\n\nif (chromaResult.collectionId) {\n  try {\n    var docText = [\n      dossier.company, dossier.industry, dossier.size, dossier.stage, dossier.hq,\n      (dossier.cultureSignals || []).join(', '),\n      (dossier.recentNews || []).join('. '),\n      dossier.researchNotes\n    ].filter(Boolean).join('\\n');\n    var upsertRes = await chromaReq('POST', '/collections/' + chromaResult.collectionId + '/upsert', {\n      ids: [slug],\n      documents: [docText],\n      metadatas: [{ company: dossier.company, slug: slug, industry: dossier.industry || '', lastUpdated: dossier.lastUpdated || '' }]\n    });\n    chromaResult.success = upsertRes.status === 200 || upsertRes.status === 201;\n    if (!chromaResult.success) chromaResult.error = 'Upsert HTTP ' + upsertRes.status + ': ' + JSON.stringify(upsertRes.data).slice(0, 200);\n  } catch(e) {\n    chromaResult.error = e.message;\n  }\n}\n\nreturn [{ json: Object.assign({}, input, { chromaResult: { success: chromaResult.success, error: chromaResult.error } }) }];"
+      },
+      "id": "write-chroma",
+      "name": "Write to Chroma",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { dossier: $('Generate Dossier').first().json.dossier, source: 'fresh', cached: false, chromaResult: $json.chromaResult } }}",
+        "options": {}
+      },
+      "id": "respond-new",
+      "name": "Respond (New)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2720,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var https = require('https');\nvar fs = require('fs');\nvar input = $input.first().json;\nvar company = input.company;\n\n// CONFIG\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\nvar exaKey = config.exa_api_key || '28d2d097-2afa-4adf-a183-4df94ea07cbb';\n\nfunction exaSearch(payload) {\n  return new Promise(function(resolve) {\n    var body = JSON.stringify(payload);\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(body, 'utf8') : body.length;\n    var opts = {\n      hostname: 'api.exa.ai', port: 443, path: '/search', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'x-api-key': exaKey, 'Content-Length': bodyLen }\n    };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() {\n        try { resolve({ status: res.statusCode, data: JSON.parse(chunks.join('')) }); }\n        catch(e) { resolve({ status: res.statusCode, data: { results: [] } }); }\n      });\n    });\n    req.on('error', function(e) { resolve({ status: 0, data: { results: [] }, error: e.message }); });\n    req.write(body);\n    req.end();\n  });\n}\n\nvar exaData = { company: null, news: null, error: null };\n\nif (exaKey) {\n  try {\n    var results = await Promise.all([\n      exaSearch({ query: company + ' company', category: 'company', numResults: 3, type: 'auto' }),\n      exaSearch({ query: '\"' + company + '\" news funding 2025 2026', category: 'news', numResults: 5, contents: { text: { maxCharacters: 300 } } })\n    ]);\n    var companyRes = results[0];\n    var newsRes = results[1];\n    if (companyRes.status === 200 && companyRes.data.results && companyRes.data.results.length) {\n      exaData.company = { results: companyRes.data.results.slice(0, 3).map(function(r) {\n        return { title: r.title || '', url: r.url || '', snippet: (r.text || r.summary || '').slice(0, 500) };\n      })};\n    } else if (companyRes.status !== 200) {\n      exaData.error = 'Company search HTTP ' + companyRes.status;\n    }\n    if (newsRes.status === 200 && newsRes.data.results && newsRes.data.results.length) {\n      exaData.news = { results: newsRes.data.results.slice(0, 5).map(function(r) {\n        return { title: r.title || '', url: r.url || '', date: r.publishedDate || '', snippet: (r.text || '').slice(0, 300) };\n      })};\n    }\n  } catch(e) { exaData.error = e.message; }\n} else { exaData.error = 'No exa_api_key configured'; }\n\nreturn [{ json: Object.assign({}, input, { exaData: exaData }) }];"
+      },
+      "id": "search-exa",
+      "name": "Search Exa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        352
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Request": {
+      "main": [
+        [
+          {
+            "node": "Get from Redis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get from Redis": {
+      "main": [
+        [
+          {
+            "node": "Check Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Cache": {
+      "main": [
+        [
+          {
+            "node": "Cache Fresh?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cache Fresh?": {
+      "main": [
+        [
+          {
+            "node": "Update Jobs Applied",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch LinkedIn Company",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Jobs Applied": {
+      "main": [
+        [
+          {
+            "node": "Redis Set (Update)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Set (Update)": {
+      "main": [
+        [
+          {
+            "node": "Respond (Cached)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch LinkedIn Company": {
+      "main": [
+        [
+          {
+            "node": "Search Tavily",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Dossier": {
+      "main": [
+        [
+          {
+            "node": "Redis Set (New)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Set (New)": {
+      "main": [
+        [
+          {
+            "node": "Write to Chroma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write to Chroma": {
+      "main": [
+        [
+          {
+            "node": "Respond (New)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Tavily": {
+      "main": [
+        [
+          {
+            "node": "Search Exa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Exa": {
+      "main": [
+        [
+          {
+            "node": "Generate Dossier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "2e766b50-6dd4-4543-8f3d-86248cd67cba",
+  "activeVersionId": "2e766b50-6dd4-4543-8f3d-86248cd67cba",
+  "versionCounter": 73,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-02-25T21:27:36.957Z",
+      "createdAt": "2026-02-25T21:27:36.957Z",
+      "role": "workflow:owner",
+      "workflowId": "VRbHtlocU8JGtMKB",
+      "projectId": "QaM2k0oqYH4I05SZ",
+      "project": {
+        "updatedAt": "2025-12-25T15:34:02.070Z",
+        "createdAt": "2025-12-25T15:32:01.854Z",
+        "id": "QaM2k0oqYH4I05SZ",
+        "name": "Chuck Charbeneau <chuck@chuckcharbeneau.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "79bb8800-b446-4185-b3fb-303ebc8909eb"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-03-12T20:23:34.267Z",
+    "createdAt": "2026-03-12T20:23:34.267Z",
+    "versionId": "2e766b50-6dd4-4543-8f3d-86248cd67cba",
+    "workflowId": "VRbHtlocU8JGtMKB",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "company-dossier",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "webhook-trigger",
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          256,
+          256
+        ],
+        "webhookId": "bcf34e7c-c7a0-48c3-bb0c-88df3063c191"
+      },
+      {
+        "parameters": {
+          "jsCode": "var body = $input.first().json.body;\nvar company = (body.company || '').trim();\nvar slug = company.toLowerCase()\n  .replace(/[^a-z0-9\\s]/g, '')\n  .trim()\n  .replace(/\\s+/g, '-');\nreturn [{ json: {\n  company: company,\n  slug: slug,\n  redisKey: 'company:dossier:' + slug,\n  jobId: body.jobId || '',\n  jobTitle: body.jobTitle || '',\n  linkedinUrl: body.linkedinUrl || ''\n}}];"
+        },
+        "id": "prep-request",
+        "name": "Prepare Request",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          480,
+          256
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "get",
+          "key": "={{ $json.redisKey }}",
+          "options": {}
+        },
+        "id": "redis-get",
+        "name": "Get from Redis",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          704,
+          256
+        ],
+        "credentials": {
+          "redis": {
+            "id": "5FcrSFYwKg4fHXx6",
+            "name": "Redis account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "var prep = $('Prepare Request').first().json;\nvar raw = Object.values($input.first().json)[0];\nvar dossier = null, isStale = true, exists = false;\n\nif (raw) {\n  try {\n    dossier = typeof raw === 'string' ? JSON.parse(raw) : raw;\n    exists = true;\n    var lastUpdated = dossier.lastUpdated ? new Date(dossier.lastUpdated) : null;\n    var daysSince = lastUpdated ? (new Date() - lastUpdated) / 86400000 : 999;\n    isStale = daysSince > 30;\n  } catch(e) { isStale = true; }\n}\n\nreturn [{ json: {\n  company: prep.company,\n  slug: prep.slug,\n  redisKey: prep.redisKey,\n  jobId: prep.jobId,\n  jobTitle: prep.jobTitle,\n  linkedinUrl: prep.linkedinUrl,\n  dossier: dossier,\n  exists: exists,\n  isStale: isStale,\n  cacheHit: exists && !isStale\n}}];"
+        },
+        "id": "check-cache",
+        "name": "Check Cache",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          928,
+          256
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "id": "cond-1",
+                "leftValue": "={{ $json.cacheHit }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "cache-fresh",
+        "name": "Cache Fresh?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          1152,
+          256
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var input = $input.first().json;\nvar dossier = JSON.parse(JSON.stringify(input.dossier));\nif (!dossier.jobsApplied) dossier.jobsApplied = [];\n\nvar alreadyAdded = dossier.jobsApplied.some(function(j) { return j.jobId === input.jobId; });\nif (!alreadyAdded && input.jobId) {\n  dossier.jobsApplied.push({\n    jobId: input.jobId,\n    title: input.jobTitle || 'Unknown',\n    linkedinUrl: input.linkedinUrl || '',\n    date: new Date().toISOString().slice(0, 10)\n  });\n}\n\nreturn [{ json: {\n  company: input.company,\n  slug: input.slug,\n  redisKey: input.redisKey,\n  dossierJson: JSON.stringify(dossier),\n  dossier: dossier,\n  source: 'cache'\n}}];"
+        },
+        "id": "update-jobs",
+        "name": "Update Jobs Applied",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1376,
+          160
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "set",
+          "key": "={{ $json.redisKey }}",
+          "value": "={{ $json.dossierJson }}"
+        },
+        "id": "redis-set-update",
+        "name": "Redis Set (Update)",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          1600,
+          160
+        ],
+        "credentials": {
+          "redis": {
+            "id": "5FcrSFYwKg4fHXx6",
+            "name": "Redis account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ { dossier: $('Update Jobs Applied').first().json.dossier, source: 'cache', cached: true } }}",
+          "options": {}
+        },
+        "id": "respond-cached",
+        "name": "Respond (Cached)",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          1824,
+          160
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var https = require('https');\nvar fs = require('fs');\nvar input = $input.first().json;\nvar slug = input.slug;\n\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\nvar liAt = config.li_at || '';\n\nfunction httpGet(hostname, path, headers) {\n  return new Promise(function(resolve, reject) {\n    var opts = { hostname: hostname, port: 443, path: path, method: 'GET',\n      headers: headers || { 'User-Agent': 'Mozilla/5.0' } };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() { resolve({ status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nvar linkedinData = {\n  employeeCount: 'Unknown',\n  industry: 'Unknown',\n  description: '',\n  linkedinUrl: 'https://www.linkedin.com/company/' + slug + '/'\n};\n\ntry {\n  var headers = { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' };\n  if (liAt) headers['Cookie'] = 'li_at=' + liAt;\n  var result = await httpGet('www.linkedin.com', '/company/' + slug + '/about/', headers);\n  if (result.status === 200) {\n    var html = result.text;\n    var empMatch = html.match(/\"employeeCountRange\":\\{\"start\":(\\d+),\"end\":(\\d+)\\}/);\n    if (empMatch) linkedinData.employeeCount = empMatch[1] + '-' + empMatch[2] + ' employees';\n    var indMatch = html.match(/\"industryName\":\"([^\"]+)\"/);\n    if (indMatch) linkedinData.industry = indMatch[1];\n    var descMatch = html.match(/\"description\":\"([^\"]{10,500})\"/);\n    if (descMatch) linkedinData.description = descMatch[1].replace(/\\\\n/g, ' ');\n  }\n} catch(e) { linkedinData.fetchError = e.message; }\n\nreturn [{ json: Object.assign({}, input, { linkedinData: linkedinData }) }];"
+        },
+        "id": "fetch-linkedin",
+        "name": "Fetch LinkedIn Company",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1376,
+          352
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var https = require('https');\nvar fs = require('fs');\nvar input = $input.first().json;\nvar company = input.company;\n\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\nvar tavilyKey = config.tavily_api_key || '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';\n\nfunction tavilySearch(query) {\n  return new Promise(function(resolve, reject) {\n    var body = JSON.stringify({\n      api_key: tavilyKey, query: query, max_results: 5, include_answer: true\n    });\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(body, 'utf8') : body.length;\n    var opts = {\n      hostname: 'api.tavily.com', port: 443, path: '/search', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'Content-Length': bodyLen }\n    };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() {\n        try { resolve(JSON.parse(chunks.join(''))); }\n        catch(e) { resolve({ results: [], answer: '' }); }\n      });\n    });\n    req.on('error', function(e) { resolve({ results: [], answer: '', error: e.message }); });\n    req.write(body);\n    req.end();\n  });\n}\n\nvar tavilyData = { culture: null, news: null, error: null };\n\nif (tavilyKey) {\n  try {\n    var cultureRes = await tavilySearch('\"' + company + '\" company culture engineering team size employees');\n    var newsRes = await tavilySearch('\"' + company + '\" company news funding 2025 2026');\n    tavilyData.culture = {\n      answer: cultureRes.answer || '',\n      results: (cultureRes.results || []).slice(0, 3).map(function(r) {\n        return { title: r.title, url: r.url, snippet: (r.content || '').slice(0, 300) };\n      })\n    };\n    tavilyData.news = {\n      answer: newsRes.answer || '',\n      results: (newsRes.results || []).slice(0, 3).map(function(r) {\n        return { title: r.title, url: r.url, snippet: (r.content || '').slice(0, 300) };\n      })\n    };\n  } catch(e) { tavilyData.error = e.message; }\n} else {\n  tavilyData.error = 'No tavily_api_key found in ai-config.json';\n}\n\nreturn [{ json: Object.assign({}, input, { tavilyData: tavilyData }) }];"
+        },
+        "id": "search-tavily",
+        "name": "Search Tavily",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1600,
+          352
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var https = require('https');\nvar http = require('http');\nvar fs = require('fs');\n\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\n\n// \u2500\u2500 CONFIG \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nvar CLAUDE_KEY = config.claude_api_key || '';\nvar CLAUDE_MODEL = config.claude_model || 'claude-opus-4-5-20251101';\nvar OLLAMA_MODEL = config.fallback_model || 'llama3.2';\nvar OLLAMA_HOST = config.ollama_host || 'host.docker.internal';\nvar OLLAMA_PORT = parseInt(config.ollama_port || '11434');\n// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nvar input = $input.first().json;\nvar company = input.company;\nvar slug = input.slug;\nvar jobId = input.jobId;\nvar jobTitle = input.jobTitle;\nvar linkedinUrl = input.linkedinUrl;\nvar linkedinData = input.linkedinData || {};\nvar tavilyData = input.tavilyData || {};\n\n// Build research context\nvar ctx = '';\nif (linkedinData.description) ctx += 'LinkedIn description: ' + linkedinData.description + '\\n\\n';\nif (linkedinData.industry && linkedinData.industry !== 'Unknown') ctx += 'Industry (LinkedIn): ' + linkedinData.industry + '\\n';\nif (linkedinData.employeeCount && linkedinData.employeeCount !== 'Unknown') ctx += 'Employee count: ' + linkedinData.employeeCount + '\\n\\n';\nif (tavilyData.culture && tavilyData.culture.answer) ctx += 'Culture research: ' + tavilyData.culture.answer + '\\n\\n';\nif (tavilyData.news && tavilyData.news.answer) ctx += 'Recent news: ' + tavilyData.news.answer + '\\n\\n';\nif (tavilyData.culture && tavilyData.culture.results) {\n  tavilyData.culture.results.forEach(function(r) { ctx += r.title + ': ' + r.snippet + '\\n'; });\n}\n\nfunction makeRequest(hostname, port, path, headers, body, useHttp) {\n  return new Promise(function(resolve, reject) {\n    var opts = { hostname: hostname, port: port, path: path, method: 'POST', headers: headers };\n    var lib = useHttp ? http : https;\n    var req = lib.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() { resolve({ status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\n\nasync function generate(systemPrompt, userPrompt) {\n  if (CLAUDE_KEY) {\n    try {\n      var cb = JSON.stringify({\n        model: CLAUDE_MODEL, max_tokens: 1024, system: systemPrompt,\n        messages: [{ role: 'user', content: userPrompt }]\n      });\n      var cbLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(cb, 'utf8') : cb.length;\n      var r = await makeRequest('api.anthropic.com', 443, '/v1/messages', {\n        'Content-Type': 'application/json', 'x-api-key': CLAUDE_KEY,\n        'anthropic-version': '2023-06-01', 'Content-Length': cbLen\n      }, cb, false);\n      if (r.status === 200) {\n        var p = JSON.parse(r.text);\n        return { text: p.content[0].text, model: CLAUDE_MODEL };\n      }\n    } catch(e) {}\n  }\n  var ob = JSON.stringify({ model: OLLAMA_MODEL, prompt: systemPrompt + '\\n\\n' + userPrompt, stream: false });\n  var obLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(ob, 'utf8') : ob.length;\n  var r = await makeRequest(OLLAMA_HOST, OLLAMA_PORT, '/api/generate', {\n    'Content-Type': 'application/json', 'Content-Length': obLen\n  }, ob, true);\n  var p = JSON.parse(r.text);\n  return { text: p.response, model: OLLAMA_MODEL };\n}\n\nvar SYSTEM = 'You are a company research assistant. Given research data, produce a structured JSON dossier about a company. Respond with ONLY valid JSON, no markdown, no explanation.';\nvar PROMPT = 'Company: ' + company + '\\n\\nResearch data:\\n' + (ctx || 'No research data available.') + '\\n\\nProduce a JSON object with exactly these fields:\\n{\\n  \"industry\": \"primary industry category\",\\n  \"size\": \"employee range e.g. 50-200 employees\",\\n  \"stage\": \"e.g. Series B, public, bootstrapped, unknown\",\\n  \"hq\": \"City, State/Country or unknown\",\\n  \"remote\": \"remote or hybrid or on-site or unknown\",\\n  \"cultureSignals\": [\"array of keywords\"],\\n  \"recentNews\": [\"array of news items as strings\"],\\n  \"glassdoorSignals\": [\"any sentiment signals from search results\"],\\n  \"researchNotes\": \"2-3 sentence narrative summary\"\\n}\\n\\nOutput ONLY the JSON object, no markdown.';\n\nvar fields = { industry:'Unknown', size:'Unknown', stage:'Unknown', hq:'Unknown', remote:'unknown',\n  cultureSignals:[], recentNews:[], glassdoorSignals:[], researchNotes:'' };\nvar usedModel = OLLAMA_MODEL;\n\ntry {\n  var result = await generate(SYSTEM, PROMPT);\n  usedModel = result.model;\n  var raw = result.text.trim()\n    .replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '');\n  Object.assign(fields, JSON.parse(raw));\n} catch(e) {\n  fields.researchNotes = 'Error generating dossier: ' + e.message;\n}\n\nvar today = new Date().toISOString().slice(0, 10);\nvar jobsApplied = [];\nif (jobId) jobsApplied.push({ jobId: jobId, title: jobTitle || 'Unknown', linkedinUrl: linkedinUrl || '', date: today });\n\nvar sources = tavilyData.error ? ['linkedin'] : ['tavily', 'linkedin'];\nsources.push('ai:' + usedModel);\n\nvar dossier = Object.assign({ company: company, slug: slug }, fields, {\n  linkedinUrl: linkedinData.linkedinUrl || 'https://www.linkedin.com/company/' + slug + '/',\n  jobsApplied: jobsApplied,\n  lastUpdated: today,\n  dataSourced: sources\n});\n\nreturn [{ json: {\n  company: company, slug: slug, redisKey: input.redisKey,\n  dossierJson: JSON.stringify(dossier), dossier: dossier\n}}];"
+        },
+        "id": "generate-dossier",
+        "name": "Generate Dossier",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2048,
+          352
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "set",
+          "key": "={{ $json.redisKey }}",
+          "value": "={{ $json.dossierJson }}"
+        },
+        "id": "redis-set-new",
+        "name": "Redis Set (New)",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          2272,
+          352
+        ],
+        "credentials": {
+          "redis": {
+            "id": "5FcrSFYwKg4fHXx6",
+            "name": "Redis account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "var http = require('http');\nvar input = $input.first().json;\nvar dossier = input.dossier;\nvar slug = input.slug;\n\nvar CHROMA_HOST = 'host.docker.internal';\nvar CHROMA_PORT = 8000;\nvar COLLECTION = 'company-dossiers';\n\nfunction chromaReq(method, path, body) {\n  return new Promise(function(resolve, reject) {\n    var bodyStr = body ? JSON.stringify(body) : '';\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(bodyStr, 'utf8') : bodyStr.length;\n    var opts = {\n      hostname: CHROMA_HOST, port: CHROMA_PORT, path: '/api/v1' + path, method: method,\n      headers: { 'Content-Type': 'application/json', 'Content-Length': bodyLen }\n    };\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() {\n        try { resolve({ status: res.statusCode, data: JSON.parse(chunks.join('')) }); }\n        catch(e) { resolve({ status: res.statusCode, data: chunks.join('') }); }\n      });\n    });\n    req.on('error', function(e) { resolve({ status: 0, data: null, error: e.message }); });\n    if (bodyStr) req.write(bodyStr);\n    req.end();\n  });\n}\n\nvar chromaResult = { success: false, error: null, collectionId: null };\n\ntry {\n  // Use get_or_create directly \u2014 avoids brittle list-then-find pattern\n  // and works with both old (array) and new ({collections:[]}) Chroma API formats\n  var createRes = await chromaReq('POST', '/collections', { name: COLLECTION, get_or_create: true });\n  if ((createRes.status === 200 || createRes.status === 201) && createRes.data && createRes.data.id) {\n    chromaResult.collectionId = createRes.data.id;\n  } else {\n    chromaResult.error = 'get_or_create failed: HTTP ' + createRes.status + ' \u2014 ' + JSON.stringify(createRes.data).slice(0, 200);\n  }\n} catch(e) {\n  chromaResult.error = 'Collection error: ' + e.message;\n}\n\nif (chromaResult.collectionId) {\n  try {\n    var docText = [\n      dossier.company, dossier.industry, dossier.size, dossier.stage, dossier.hq,\n      (dossier.cultureSignals || []).join(', '),\n      (dossier.recentNews || []).join('. '),\n      dossier.researchNotes\n    ].filter(Boolean).join('\\n');\n    var upsertRes = await chromaReq('POST', '/collections/' + chromaResult.collectionId + '/upsert', {\n      ids: [slug],\n      documents: [docText],\n      metadatas: [{ company: dossier.company, slug: slug, industry: dossier.industry || '', lastUpdated: dossier.lastUpdated || '' }]\n    });\n    chromaResult.success = upsertRes.status === 200 || upsertRes.status === 201;\n    if (!chromaResult.success) chromaResult.error = 'Upsert HTTP ' + upsertRes.status + ': ' + JSON.stringify(upsertRes.data).slice(0, 200);\n  } catch(e) {\n    chromaResult.error = e.message;\n  }\n}\n\nreturn [{ json: Object.assign({}, input, { chromaResult: { success: chromaResult.success, error: chromaResult.error } }) }];"
+        },
+        "id": "write-chroma",
+        "name": "Write to Chroma",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2496,
+          352
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ { dossier: $('Generate Dossier').first().json.dossier, source: 'fresh', cached: false, chromaResult: $json.chromaResult } }}",
+          "options": {}
+        },
+        "id": "respond-new",
+        "name": "Respond (New)",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1,
+        "position": [
+          2720,
+          352
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var https = require('https');\nvar fs = require('fs');\nvar input = $input.first().json;\nvar company = input.company;\n\n// CONFIG\nvar config = {};\ntry { config = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8')); } catch(e) {}\nvar exaKey = config.exa_api_key || '28d2d097-2afa-4adf-a183-4df94ea07cbb';\n\nfunction exaSearch(payload) {\n  return new Promise(function(resolve) {\n    var body = JSON.stringify(payload);\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(body, 'utf8') : body.length;\n    var opts = {\n      hostname: 'api.exa.ai', port: 443, path: '/search', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'x-api-key': exaKey, 'Content-Length': bodyLen }\n    };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end', function() {\n        try { resolve({ status: res.statusCode, data: JSON.parse(chunks.join('')) }); }\n        catch(e) { resolve({ status: res.statusCode, data: { results: [] } }); }\n      });\n    });\n    req.on('error', function(e) { resolve({ status: 0, data: { results: [] }, error: e.message }); });\n    req.write(body);\n    req.end();\n  });\n}\n\nvar exaData = { company: null, news: null, error: null };\n\nif (exaKey) {\n  try {\n    var results = await Promise.all([\n      exaSearch({ query: company + ' company', category: 'company', numResults: 3, type: 'auto' }),\n      exaSearch({ query: '\"' + company + '\" news funding 2025 2026', category: 'news', numResults: 5, contents: { text: { maxCharacters: 300 } } })\n    ]);\n    var companyRes = results[0];\n    var newsRes = results[1];\n    if (companyRes.status === 200 && companyRes.data.results && companyRes.data.results.length) {\n      exaData.company = { results: companyRes.data.results.slice(0, 3).map(function(r) {\n        return { title: r.title || '', url: r.url || '', snippet: (r.text || r.summary || '').slice(0, 500) };\n      })};\n    } else if (companyRes.status !== 200) {\n      exaData.error = 'Company search HTTP ' + companyRes.status;\n    }\n    if (newsRes.status === 200 && newsRes.data.results && newsRes.data.results.length) {\n      exaData.news = { results: newsRes.data.results.slice(0, 5).map(function(r) {\n        return { title: r.title || '', url: r.url || '', date: r.publishedDate || '', snippet: (r.text || '').slice(0, 300) };\n      })};\n    }\n  } catch(e) { exaData.error = e.message; }\n} else { exaData.error = 'No exa_api_key configured'; }\n\nreturn [{ json: Object.assign({}, input, { exaData: exaData }) }];"
+        },
+        "id": "search-exa",
+        "name": "Search Exa",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1824,
+          352
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook": {
+        "main": [
+          [
+            {
+              "node": "Prepare Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prepare Request": {
+        "main": [
+          [
+            {
+              "node": "Get from Redis",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get from Redis": {
+        "main": [
+          [
+            {
+              "node": "Check Cache",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Check Cache": {
+        "main": [
+          [
+            {
+              "node": "Cache Fresh?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Cache Fresh?": {
+        "main": [
+          [
+            {
+              "node": "Update Jobs Applied",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Fetch LinkedIn Company",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Update Jobs Applied": {
+        "main": [
+          [
+            {
+              "node": "Redis Set (Update)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis Set (Update)": {
+        "main": [
+          [
+            {
+              "node": "Respond (Cached)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch LinkedIn Company": {
+        "main": [
+          [
+            {
+              "node": "Search Tavily",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Generate Dossier": {
+        "main": [
+          [
+            {
+              "node": "Redis Set (New)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Redis Set (New)": {
+        "main": [
+          [
+            {
+              "node": "Write to Chroma",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Write to Chroma": {
+        "main": [
+          [
+            {
+              "node": "Respond (New)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Search Tavily": {
+        "main": [
+          [
+            {
+              "node": "Search Exa",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Search Exa": {
+        "main": [
+          [
+            {
+              "node": "Generate Dossier",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Chuck Charbeneau",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-03-12T20:23:34.331Z",
+        "id": 107,
+        "workflowId": "VRbHtlocU8JGtMKB",
+        "versionId": "2e766b50-6dd4-4543-8f3d-86248cd67cba",
+        "event": "activated",
+        "userId": "79bb8800-b446-4185-b3fb-303ebc8909eb"
+      },
+      {
+        "createdAt": "2026-03-12T20:23:34.312Z",
+        "id": 106,
+        "workflowId": "VRbHtlocU8JGtMKB",
+        "versionId": "2e766b50-6dd4-4543-8f3d-86248cd67cba",
+        "event": "deactivated",
+        "userId": "79bb8800-b446-4185-b3fb-303ebc8909eb"
+      }
+    ]
+  }
+}

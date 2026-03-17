@@ -1,0 +1,599 @@
+{
+  "updatedAt": "2026-03-10T14:39:55.328Z",
+  "createdAt": "2026-03-04T19:41:09.829Z",
+  "id": "casAd11FesXbMLnG",
+  "name": "Job Application - Job Processor",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "loop-merge",
+      "name": "Loop Control",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        240,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pop",
+        "list": "job-queue",
+        "options": {}
+      },
+      "id": "pop-queue",
+      "name": "Pop from Queue",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        480,
+        304
+      ],
+      "credentials": {
+        "redis": {
+          "id": "5FcrSFYwKg4fHXx6",
+          "name": "Redis account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-has-job",
+              "leftValue": "={{ $json.propertyName ? $json.propertyName.jobId : '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "has-job",
+      "name": "Has Job?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var fs    = require('fs');\nvar https = require('https');\nvar http  = require('http');\nvar LOG_FILE = '/home/node/.n8n/jobsearch-log.json';\n\n// \u2500\u2500 CONFIG \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nvar CLAUDE_MODEL   = 'claude-sonnet-4-6';\nvar FALLBACK_MODEL = 'llama3.2';\n// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nvar apiKey = '';\ntry {\n  var cfg = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8'));\n  apiKey = cfg.anthropic_api_key || '';\n} catch(e) {}\n\nvar resume = '[Resume not found]';\ntry { resume = fs.readFileSync('/jobhunt/resume.md', 'utf8'); } catch(e) {}\n\nfunction callClaude(systemPrompt, userMessage, maxTokens) {\n  return new Promise(function(resolve, reject) {\n    var body = JSON.stringify({\n      model: CLAUDE_MODEL, max_tokens: maxTokens || 2000,\n      system: systemPrompt,\n      messages: [{ role: 'user', content: userMessage }]\n    });\n    var opts = {\n      hostname: 'api.anthropic.com', port: 443, path: '/v1/messages', method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Content-Length': Buffer.byteLength(body, 'utf8'),\n        'x-api-key': apiKey,\n        'anthropic-version': '2023-06-01'\n      }\n    };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() { resolve({ ok: res.statusCode === 200, status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\n\nfunction getClaudeText(r) {\n  try {\n    var p = JSON.parse(r);\n    if (p.content && p.content[0]) return p.content[0].text || '';\n    if (p.error) return 'Claude error: ' + (p.error.message || JSON.stringify(p.error));\n  } catch(e) {}\n  return r;\n}\n\nfunction isClaudeError(text) {\n  return typeof text === 'string' && text.indexOf('Claude error:') === 0;\n}\n\nfunction callOllama(systemPrompt, userMessage) {\n  return new Promise(function(resolve, reject) {\n    var body = JSON.stringify({\n      model: FALLBACK_MODEL,\n      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }],\n      stream: false\n    });\n    var opts = {\n      hostname: 'host.docker.internal', port: 11434, path: '/api/chat', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body, 'utf8') }\n    };\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() {\n        if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error('Ollama HTTP ' + res.statusCode));\n        try {\n          var p = JSON.parse(chunks.join(''));\n          resolve((p.message && p.message.content) ? p.message.content : (p.response || ''));\n        } catch(e) { reject(e); }\n      });\n    });\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\n\nasync function generate(systemPrompt, userMessage, maxTokens) {\n  try {\n    var r   = await callClaude(systemPrompt, userMessage, maxTokens);\n    var txt = getClaudeText(r.text);\n    if (r.ok && !isClaudeError(txt)) return { text: txt, model: 'claude:' + CLAUDE_MODEL };\n  } catch(e) {}\n  var fallback = await callOllama(systemPrompt, userMessage);\n  return { text: fallback, model: 'ollama:' + FALLBACK_MODEL };\n}\n\nasync function getDossier(company, jobId, jobTitle, linkedinUrl) {\n  return new Promise(function(resolve) {\n    var payload = JSON.stringify({ company: company, jobId: jobId || '', jobTitle: jobTitle || '', linkedinUrl: linkedinUrl || '' });\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(payload, 'utf8') : payload.length;\n    var opts = {\n      hostname: 'localhost', port: 5678, path: '/webhook/company-dossier', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'Content-Length': bodyLen }\n    };\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() {\n        try { resolve(JSON.parse(chunks.join('')).dossier || null); }\n        catch(e) { resolve(null); }\n      });\n    });\n    req.on('error', function() { resolve(null); });\n    req.setTimeout(30000, function() { req.destroy(); resolve(null); });\n    req.write(payload);\n    req.end();\n  });\n}\n\nfunction safe(str) {\n  return (str || 'Unknown').replace(/[<>:\"\\/\\\\|?*]/g, '-').replace(/\\s+/g, ' ').trim().slice(0, 50);\n}\n\nasync function processJob(job) {\n  var dossier = await getDossier(job.company, job.jobId, job.title, job.linkedinUrl);\n  var dossierCtx = '';\n  if (dossier) {\n    dossierCtx =\n      '\\n\\nCOMPANY DOSSIER (from external research):' +\n      '\\nIndustry: ' + (dossier.industry || 'Unknown') +\n      '\\nSize: '     + (dossier.size     || 'Unknown') +\n      '\\nStage: '    + (dossier.stage    || 'Unknown') +\n      '\\nHQ: '       + (dossier.hq       || 'Unknown') +\n      '\\nRemote policy: ' + (dossier.remote || 'unknown') +\n      '\\nCulture signals: ' + (dossier.cultureSignals || []).join(', ') +\n      '\\nRecent news: '    + (dossier.recentNews || []).slice(0, 3).join('; ') +\n      '\\nOverview: '       + (dossier.researchNotes || '');\n  }\n  var jd      = (job.description || '').slice(0, 3000);\n  var res     = resume.slice(0, 4000);\n  var company = safe(job.company);\n  var title   = safe(job.title);\n  var today   = new Date().toISOString().slice(0, 10);\n\n  var g1 = await generate(\n    'You are a career researcher. Provide concise, factual notes to help a job applicant understand a potential employer.',\n    'Role: ' + job.title + '\\nCompany: ' + job.company + '\\nLocation: ' + (job.location || '') +\n    '\\n\\nJob description excerpt:\\n' + jd.slice(0, 1500) +\n    dossierCtx +\n    '\\n\\nWrite company research as markdown with exactly these three sections, in this order. Output only the sections and their content, no preamble or closing remarks.\\n\\n## Company Overview\\n[What the company does, its industry position, business model, and scale.]\\n\\n## Culture and Team Signals\\n[Signals about culture, team, and working style from the job listing and any dossier data.]\\n\\n## Strategic Importance of ' + job.title + ' Role\\n[Why this specific role matters strategically at this company right now.]\\n\\nIncorporate dossier data where available; fall back to job description signals. Each section should be one focused paragraph.',\n    700);\n\n  var g2 = await generate(\n    'You are an expert resume writer. Tailor resumes to specific job descriptions while maintaining complete factual accuracy. Match vocabulary and emphasize relevant experience.',\n    'JOB: ' + job.title + ' at ' + job.company +\n    '\\n\\nJOB DESCRIPTION:\\n' + jd +\n    dossierCtx +\n    '\\n\\n---\\n\\nMY RESUME:\\n' + res +\n    '\\n\\n---\\n\\nRewrite my resume tailored for this role. Use the exact vocabulary from the job description. Where culture signals are available in the dossier, align framing accordingly. Lead with the most relevant experience. Preserve all facts - do not invent anything. Format as clean Markdown with clear sections.',\n    3000);\n\n  var g3 = await generate(\n    'You are an expert cover letter writer. Create compelling, authentic letters. Professional but human tone. No buzzwords: no \"synergy\", \"passionate\", \"leverage\", \"excited to join\", \"touch base\".',\n    'Role: ' + job.title + ' at ' + job.company + '\\nLocation: ' + (job.location || '') +\n    '\\n\\nJob description:\\n' + jd.slice(0, 2000) +\n    dossierCtx +\n    '\\n\\nMy background:\\n' + res.slice(0, 2500) +\n    '\\n\\nFit analysis: ' + (job.fitReasoning || '') +\n    '\\nKey matches: ' + (job.fitMatches || []).join(', ') +\n    '\\n\\nWrite a cover letter (3-4 paragraphs). Address \"Dear Hiring Manager,\" unless a specific name appears in the listing. Open by connecting my specific background to this specific role. If dossier data is available, weave in a specific detail about the company (recent news, stage, culture) to show genuine research. Highlight 2-3 accomplishments that map to job requirements. Close with a confident, specific call to action.',\n    1200);\n\n  var folderName = company + ' - ' + title;\n  var jobNote =\n    '---\\n' +\n    'date: ' + today + '\\n' +\n    'title: ' + job.title + '\\n' +\n    'company: ' + job.company + '\\n' +\n    'type: \"job posting\"\\n' +\n    'source: ' + (job.source || 'auto-search') + '\\n' +\n    'match-score: ' + (job.fitScore || 0) + '\\n' +\n    'url: ' + (job.linkedinUrl || '') + '\\n' +\n    'active: true\\n' +\n    'application: false\\n' +\n    'status: in-progress\\n' +\n    (dossier ?\n      'industry: '     + (dossier.industry || '') + '\\n' +\n      'companySize: '  + (dossier.size     || '') + '\\n' +\n      'companyStage: ' + (dossier.stage    || '') + '\\n' : '') +\n    '---\\n\\n' +\n    '# ' + job.title + ' - ' + job.company + '\\n\\n' +\n    '| Field | Value |\\n|---|---|\\n' +\n    '| Location | '   + (job.location || '') + ' |\\n' +\n    '| Discovered | ' + today + ' |\\n' +\n    '| Fit Score | '  + (job.fitScore || 0) + '/100 |\\n' +\n    '| Source | '     + (job.source || 'auto-search') + ' |\\n' +\n    (dossier ?\n      '| Industry | '     + (dossier.industry || '') + ' |\\n' +\n      '| Company Size | ' + (dossier.size     || '') + ' |\\n' +\n      '| Stage | '        + (dossier.stage    || '') + ' |\\n' : '') +\n    '\\n## Fit Analysis\\n\\n' + (job.fitReasoning || '') + '\\n\\n' +\n    '**Key Matches:** ' + (job.fitMatches || []).join(', ') + '\\n\\n' +\n    '**Gaps:** '        + (job.fitGaps    || []).join(', ') + '\\n\\n' +\n    '## Job Description\\n\\n' + (job.description || '') + '\\n';\n\n  return {\n    status:     'success',\n    jobId:      job.jobId,\n    company:    job.company,\n    title:      job.title,\n    fitScore:   job.fitScore,\n    outputFolder: folderName,\n    clippingFile: job.clippingFile || null,\n    source:       job.source || 'auto-search',\n    dossierSource: dossier ? (dossier.dataSourced || []).join(', ') : 'none',\n    generationModels: { research: g1.model, tailoredResume: g2.model, coverLetter: g3.model },\n    generated: {\n      research:    g1.text,\n      resume:      '# Resume - ' + job.title + ' at ' + job.company + '\\n\\n*Tailored: ' + today + ' | Fit: ' + (job.fitScore || 0) + '/100*\\n\\n---\\n\\n' + g2.text,\n      coverLetter: '# Cover Letter - ' + job.title + ' at ' + job.company + '\\n\\n' + today + '\\n\\n---\\n\\n' + g3.text,\n      jobNote:     jobNote\n    },\n    paths: {\n      obsidianJobNote:         'Companies/Research/' + company + '/Jobs/' + title + '.md',\n      obsidianCompanyResearch: 'Companies/Research/' + company + '/Company Research.md',\n      localFolder:             '/jobhunt/research/' + folderName,\n      localResume:             '/jobhunt/research/' + folderName + '/Resume.md',\n      localCoverLetter:        '/jobhunt/research/' + folderName + '/Cover Letter.md'\n    }\n  };\n}\n\n// \u2500\u2500 Main: single job from Redis queue \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nvar rawValue = $input.first().json.propertyName;\nif (!rawValue) {\n  return [{ json: { total: 1, succeeded: 0, skipped: 0, failed: 1,\n    results: [{ status: 'error', error: 'Empty value from Redis pop' }],\n    processedAt: new Date().toISOString() } }];\n}\n\nvar job;\ntry { job = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue; }\ncatch(e) {\n  return [{ json: { total: 1, succeeded: 0, skipped: 0, failed: 1,\n    results: [{ status: 'error', error: 'JSON parse failed: ' + e.message }],\n    processedAt: new Date().toISOString() } }];\n}\n\nvar log = {};\ntry { if (fs.existsSync(LOG_FILE)) log = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8')); } catch(e) {}\n\nif (log[job.jobId] && log[job.jobId].status === 'processed') {\n  return [{ json: {\n    total: 1, succeeded: 0, skipped: 1, failed: 0,\n    results: [{ status: 'skipped', jobId: job.jobId, reason: 'already_processed' }],\n    processedAt: new Date().toISOString() } }];\n}\n\ntry {\n  var result = await processJob(job);\n  log[job.jobId] = {\n    jobId: job.jobId, title: job.title, company: job.company,\n    location: job.location || '', url: job.linkedinUrl || '',\n    source: job.source || 'auto-search',\n    fitScore: job.fitScore || 0,\n    processedAt: new Date().toISOString(), status: 'processed',\n    outputFolder: result.outputFolder\n  };\n  fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2), 'utf8');\n  return [{ json: {\n    total: 1, succeeded: 1, skipped: 0, failed: 0,\n    results: [result],\n    processedAt: new Date().toISOString() } }];\n} catch(e) {\n  log[job.jobId] = {\n    jobId: job.jobId || 'unknown', title: job.title || 'unknown',\n    company: job.company || 'unknown',\n    processedAt: new Date().toISOString(), status: 'error', error: e.message\n  };\n  fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2), 'utf8');\n  return [{ json: {\n    total: 1, succeeded: 0, skipped: 0, failed: 1,\n    results: [{ status: 'error', jobId: job.jobId, company: job.company || '', error: e.message }],\n    processedAt: new Date().toISOString() } }];\n}"
+      },
+      "id": "process-single-job",
+      "name": "Process Single Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var http = require('http');\nvar fs   = require('fs');\n\nvar CONFIG_FILE = '/home/node/.n8n/ai-config.json';\n\nvar cfg = {};\ntry { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch(e) {}\n\nvar OBSIDIAN_HOST    = cfg.obsidian_host    || 'host.docker.internal';\nvar OBSIDIAN_PORT    = cfg.obsidian_port    || 27123;\nvar OBSIDIAN_API_KEY = cfg.obsidian_api_key || 'aa8bc927de7893c1417ecc185870d150e8555469993970ded92287c2295beed8';\n\nif (!OBSIDIAN_API_KEY) {\n  throw new Error('OBSIDIAN_API_KEY missing from ai-config.json');\n}\n\nfunction vaultPath(relativePath) {\n  return '/vault/' + relativePath.split('/').map(encodeURIComponent).join('/');\n}\n\nfunction obsidianRequest(method, relativePath, body) {\n  return new Promise(function(resolve, reject) {\n    var bodyBuf = body ? Buffer.from(body, 'utf8') : null;\n    var opts = {\n      hostname: OBSIDIAN_HOST, port: OBSIDIAN_PORT,\n      path: vaultPath(relativePath), method: method,\n      headers: { 'Authorization': 'Bearer ' + OBSIDIAN_API_KEY }\n    };\n    if (bodyBuf) {\n      opts.headers['Content-Type'] = 'text/markdown';\n      opts.headers['Content-Length'] = bodyBuf.length;\n    }\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() { resolve({ status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    if (bodyBuf) req.write(bodyBuf);\n    req.end();\n  });\n}\n\nfunction mergeFrontmatter(content, additions) {\n  var fmMatch = content.match(/^---\\r?\\n([\\s\\S]*?)\\r?\\n---(\\r?\\n)/);\n  if (!fmMatch) {\n    var block = '---\\n';\n    var aKeys = Object.keys(additions);\n    for (var a = 0; a < aKeys.length; a++) { block += aKeys[a] + ': ' + additions[aKeys[a]] + '\\n'; }\n    block += '---\\n\\n';\n    return block + content;\n  }\n  var fmLines  = fmMatch[1];\n  var bodyPart = content.slice(fmMatch[0].length);\n  var aKeys    = Object.keys(additions);\n  for (var a = 0; a < aKeys.length; a++) {\n    var key = aKeys[a]; var val = String(additions[key]);\n    var re = new RegExp('(^|\\\\n)(' + key.replace(/-/g, '\\\\-') + '\\\\s*:.*)');\n    if (re.test(fmLines)) {\n      fmLines = fmLines.replace(re, function(m, prefix) { return prefix + key + ': ' + val; });\n    } else { fmLines = fmLines + '\\n' + key + ': ' + val; }\n  }\n  return '---\\n' + fmLines + '\\n---\\n' + bodyPart;\n}\n\nvar input   = $input.first().json;\nvar results = input.results || [];\nvar writes  = [];\nvar today   = new Date().toISOString().slice(0, 10);\n\nfor (var i = 0; i < results.length; i++) {\n  var result = results[i];\n  if (result.status !== 'success' || !result.generated || !result.paths) continue;\n  try {\n    if (result.clippingFile) {\n      var clippingVaultPath = 'Clippings/' + result.clippingFile;\n      var getRes = await obsidianRequest('GET', clippingVaultPath);\n      if (getRes.status !== 200) {\n        writes.push({ file: clippingVaultPath, action: 'GET', http: getRes.status, error: 'fallback to fresh' });\n        var fallRes = await obsidianRequest('PUT', result.paths.obsidianJobNote, result.generated.jobNote);\n        writes.push({ file: result.paths.obsidianJobNote, action: 'PUT (fallback)', http: fallRes.status });\n      } else {\n        var enriched = mergeFrontmatter(getRes.text, { 'match-score': result.fitScore || 100, status: 'in-progress', processed: today });\n        var sections = '\\n\\n---\\n\\n## Company Research\\n\\n' + result.generated.research + '\\n\\n## Tailored Resume\\n\\n' + result.generated.resume + '\\n\\n## Cover Letter\\n\\n' + result.generated.coverLetter + '\\n';\n        var putRes = await obsidianRequest('PUT', result.paths.obsidianJobNote, enriched + sections);\n        writes.push({ file: result.paths.obsidianJobNote, action: 'PUT (from clipping)', http: putRes.status });\n        if (putRes.status >= 200 && putRes.status < 300) {\n          var delRes = await obsidianRequest('DELETE', clippingVaultPath);\n          writes.push({ file: clippingVaultPath, action: 'DELETE', http: delRes.status });\n        }\n      }\n    } else {\n      var noteRes = await obsidianRequest('PUT', result.paths.obsidianJobNote, result.generated.jobNote);\n      writes.push({ file: result.paths.obsidianJobNote, action: 'PUT', http: noteRes.status });\n    }\n    var existRes = await obsidianRequest('GET', result.paths.obsidianCompanyResearch);\n    if (existRes.status === 200) {\n      var appendText = '\\n\\n---\\n\\n## Update: ' + today + ' (' + result.title + ')\\n\\n' + result.generated.research;\n      var appendRes = await obsidianRequest('POST', result.paths.obsidianCompanyResearch, appendText);\n      writes.push({ file: result.paths.obsidianCompanyResearch, action: 'POST (append)', http: appendRes.status });\n    } else {\n      var freshText = '---\\ndate: ' + today + '\\ntitle: ' + result.company + '\\ncompany: ' + result.company + '\\ntype: Company Research\\n---\\n\\n# [[' + result.company + ']]\\n\\n' + result.generated.research + '\\n\\n---\\n*First researched: ' + today + ' (' + result.title + ')*\\n';\n      var createRes = await obsidianRequest('PUT', result.paths.obsidianCompanyResearch, freshText);\n      writes.push({ file: result.paths.obsidianCompanyResearch, action: 'PUT (new)', http: createRes.status });\n    }\n  } catch(e) { writes.push({ company: result.company, error: e.message }); }\n}\n\nvar output = {};\nvar keys = Object.keys(input);\nfor (var k = 0; k < keys.length; k++) { output[keys[k]] = input[keys[k]]; }\noutput.obsidianWrites = writes;\nreturn [{ json: output }];"
+      },
+      "id": "write-obsidian",
+      "name": "Write Obsidian Notes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "var fs = require('fs');\n\nfunction ensureDir(d) {\n  var parts = d.split('/');\n  var cur = '';\n  for (var i = 0; i < parts.length; i++) {\n    if (!parts[i]) { cur = '/'; continue; }\n    cur = (cur === '/' ? '/' : cur + '/') + parts[i];\n    try { fs.mkdirSync(cur); } catch(e) { if (e.code !== 'EEXIST') throw e; }\n  }\n}\n\nvar input   = $input.first().json;\nvar results = input.results || [];\nvar writes  = [];\n\nfor (var i = 0; i < results.length; i++) {\n  var result = results[i];\n  if (result.status !== 'success' || !result.generated || !result.paths) continue;\n  try {\n    ensureDir(result.paths.localFolder);\n    fs.writeFileSync(result.paths.localResume, result.generated.resume, 'utf8');\n    fs.writeFileSync(result.paths.localCoverLetter, result.generated.coverLetter, 'utf8');\n    writes.push({ folder: result.outputFolder, status: 'written' });\n  } catch(e) { writes.push({ folder: result.outputFolder || result.company, error: e.message }); }\n}\n\nvar output = {};\nvar keys = Object.keys(input);\nfor (var k = 0; k < keys.length; k++) { output[keys[k]] = input[keys[k]]; }\noutput.localWrites = writes;\nreturn [{ json: output }];\n"
+      },
+      "id": "write-files",
+      "name": "Write Job Hunt Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AHBLP6N02",
+          "mode": "list",
+          "cachedResultName": "job-research"
+        },
+        "text": "={{ '*Job Processed* \\u2014 ' + (($json.results || [])[0] ? (($json.results[0].status === 'success' ? '*' + $json.results[0].title + '* at _' + $json.results[0].company + '_ \\u2014 *' + $json.results[0].fitScore + '%* fit' : ($json.results[0].status === 'skipped' ? '~' + ($json.results[0].jobId||'') + '~ _(already processed)_' : '\\u26a0\\ufe0f Error: ' + ($json.results[0].company||'') + ': ' + $json.results[0].error))) : '_no result_') }}",
+        "otherOptions": {}
+      },
+      "id": "send-slack",
+      "name": "Send Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        1600,
+        448
+      ],
+      "webhookId": "2ac05bce-d5e6-49e2-b48b-d1d9d9ceae03",
+      "credentials": {
+        "slackApi": {
+          "id": "s5pyniaybSCztmFC",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "queue-empty",
+      "name": "Queue Empty",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        960,
+        464
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Loop Control",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Control": {
+      "main": [
+        [
+          {
+            "node": "Pop from Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pop from Queue": {
+      "main": [
+        [
+          {
+            "node": "Has Job?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Job?": {
+      "main": [
+        [
+          {
+            "node": "Process Single Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Single Job": {
+      "main": [
+        [
+          {
+            "node": "Write Obsidian Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Obsidian Notes": {
+      "main": [
+        [
+          {
+            "node": "Write Job Hunt Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Job Hunt Files": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Notification": {
+      "main": [
+        [
+          {
+            "node": "Loop Control",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "staticData": {
+    "node:Schedule Trigger": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": {},
+  "versionId": "7dd642e5-60d5-4f11-9ad4-c564cececc98",
+  "activeVersionId": "7dd642e5-60d5-4f11-9ad4-c564cececc98",
+  "versionCounter": 55,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-03-04T19:41:09.833Z",
+      "createdAt": "2026-03-04T19:41:09.833Z",
+      "role": "workflow:owner",
+      "workflowId": "casAd11FesXbMLnG",
+      "projectId": "QaM2k0oqYH4I05SZ",
+      "project": {
+        "updatedAt": "2025-12-25T15:34:02.070Z",
+        "createdAt": "2025-12-25T15:32:01.854Z",
+        "id": "QaM2k0oqYH4I05SZ",
+        "name": "Chuck Charbeneau <chuck@chuckcharbeneau.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "79bb8800-b446-4185-b3fb-303ebc8909eb"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-03-10T14:39:55.329Z",
+    "createdAt": "2026-03-10T14:39:55.329Z",
+    "versionId": "7dd642e5-60d5-4f11-9ad4-c564cececc98",
+    "workflowId": "casAd11FesXbMLnG",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 15
+              }
+            ]
+          }
+        },
+        "id": "schedule-trigger",
+        "name": "Schedule Trigger",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.1,
+        "position": [
+          0,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "chooseBranch"
+        },
+        "id": "loop-merge",
+        "name": "Loop Control",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3,
+        "position": [
+          240,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "pop",
+          "list": "job-queue",
+          "options": {}
+        },
+        "id": "pop-queue",
+        "name": "Pop from Queue",
+        "type": "n8n-nodes-base.redis",
+        "typeVersion": 1,
+        "position": [
+          480,
+          304
+        ],
+        "credentials": {
+          "redis": {
+            "id": "5FcrSFYwKg4fHXx6",
+            "name": "Redis account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 1
+            },
+            "conditions": [
+              {
+                "id": "check-has-job",
+                "leftValue": "={{ $json.propertyName ? $json.propertyName.jobId : '' }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEmpty"
+                }
+              }
+            ],
+            "combinator": "and"
+          }
+        },
+        "id": "has-job",
+        "name": "Has Job?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2,
+        "position": [
+          720,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var fs    = require('fs');\nvar https = require('https');\nvar http  = require('http');\nvar LOG_FILE = '/home/node/.n8n/jobsearch-log.json';\n\n// \u2500\u2500 CONFIG \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nvar CLAUDE_MODEL   = 'claude-sonnet-4-6';\nvar FALLBACK_MODEL = 'llama3.2';\n// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nvar apiKey = '';\ntry {\n  var cfg = JSON.parse(fs.readFileSync('/home/node/.n8n/ai-config.json', 'utf8'));\n  apiKey = cfg.anthropic_api_key || '';\n} catch(e) {}\n\nvar resume = '[Resume not found]';\ntry { resume = fs.readFileSync('/jobhunt/resume.md', 'utf8'); } catch(e) {}\n\nfunction callClaude(systemPrompt, userMessage, maxTokens) {\n  return new Promise(function(resolve, reject) {\n    var body = JSON.stringify({\n      model: CLAUDE_MODEL, max_tokens: maxTokens || 2000,\n      system: systemPrompt,\n      messages: [{ role: 'user', content: userMessage }]\n    });\n    var opts = {\n      hostname: 'api.anthropic.com', port: 443, path: '/v1/messages', method: 'POST',\n      headers: {\n        'Content-Type': 'application/json',\n        'Content-Length': Buffer.byteLength(body, 'utf8'),\n        'x-api-key': apiKey,\n        'anthropic-version': '2023-06-01'\n      }\n    };\n    var req = https.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() { resolve({ ok: res.statusCode === 200, status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\n\nfunction getClaudeText(r) {\n  try {\n    var p = JSON.parse(r);\n    if (p.content && p.content[0]) return p.content[0].text || '';\n    if (p.error) return 'Claude error: ' + (p.error.message || JSON.stringify(p.error));\n  } catch(e) {}\n  return r;\n}\n\nfunction isClaudeError(text) {\n  return typeof text === 'string' && text.indexOf('Claude error:') === 0;\n}\n\nfunction callOllama(systemPrompt, userMessage) {\n  return new Promise(function(resolve, reject) {\n    var body = JSON.stringify({\n      model: FALLBACK_MODEL,\n      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userMessage }],\n      stream: false\n    });\n    var opts = {\n      hostname: 'host.docker.internal', port: 11434, path: '/api/chat', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body, 'utf8') }\n    };\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() {\n        if (res.statusCode < 200 || res.statusCode >= 300) return reject(new Error('Ollama HTTP ' + res.statusCode));\n        try {\n          var p = JSON.parse(chunks.join(''));\n          resolve((p.message && p.message.content) ? p.message.content : (p.response || ''));\n        } catch(e) { reject(e); }\n      });\n    });\n    req.on('error', reject);\n    req.write(body);\n    req.end();\n  });\n}\n\nasync function generate(systemPrompt, userMessage, maxTokens) {\n  try {\n    var r   = await callClaude(systemPrompt, userMessage, maxTokens);\n    var txt = getClaudeText(r.text);\n    if (r.ok && !isClaudeError(txt)) return { text: txt, model: 'claude:' + CLAUDE_MODEL };\n  } catch(e) {}\n  var fallback = await callOllama(systemPrompt, userMessage);\n  return { text: fallback, model: 'ollama:' + FALLBACK_MODEL };\n}\n\nasync function getDossier(company, jobId, jobTitle, linkedinUrl) {\n  return new Promise(function(resolve) {\n    var payload = JSON.stringify({ company: company, jobId: jobId || '', jobTitle: jobTitle || '', linkedinUrl: linkedinUrl || '' });\n    var bodyLen = typeof Buffer !== 'undefined' ? Buffer.byteLength(payload, 'utf8') : payload.length;\n    var opts = {\n      hostname: 'localhost', port: 5678, path: '/webhook/company-dossier', method: 'POST',\n      headers: { 'Content-Type': 'application/json', 'Content-Length': bodyLen }\n    };\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() {\n        try { resolve(JSON.parse(chunks.join('')).dossier || null); }\n        catch(e) { resolve(null); }\n      });\n    });\n    req.on('error', function() { resolve(null); });\n    req.setTimeout(30000, function() { req.destroy(); resolve(null); });\n    req.write(payload);\n    req.end();\n  });\n}\n\nfunction safe(str) {\n  return (str || 'Unknown').replace(/[<>:\"\\/\\\\|?*]/g, '-').replace(/\\s+/g, ' ').trim().slice(0, 50);\n}\n\nasync function processJob(job) {\n  var dossier = await getDossier(job.company, job.jobId, job.title, job.linkedinUrl);\n  var dossierCtx = '';\n  if (dossier) {\n    dossierCtx =\n      '\\n\\nCOMPANY DOSSIER (from external research):' +\n      '\\nIndustry: ' + (dossier.industry || 'Unknown') +\n      '\\nSize: '     + (dossier.size     || 'Unknown') +\n      '\\nStage: '    + (dossier.stage    || 'Unknown') +\n      '\\nHQ: '       + (dossier.hq       || 'Unknown') +\n      '\\nRemote policy: ' + (dossier.remote || 'unknown') +\n      '\\nCulture signals: ' + (dossier.cultureSignals || []).join(', ') +\n      '\\nRecent news: '    + (dossier.recentNews || []).slice(0, 3).join('; ') +\n      '\\nOverview: '       + (dossier.researchNotes || '');\n  }\n  var jd      = (job.description || '').slice(0, 3000);\n  var res     = resume.slice(0, 4000);\n  var company = safe(job.company);\n  var title   = safe(job.title);\n  var today   = new Date().toISOString().slice(0, 10);\n\n  var g1 = await generate(\n    'You are a career researcher. Provide concise, factual notes to help a job applicant understand a potential employer.',\n    'Role: ' + job.title + '\\nCompany: ' + job.company + '\\nLocation: ' + (job.location || '') +\n    '\\n\\nJob description excerpt:\\n' + jd.slice(0, 1500) +\n    dossierCtx +\n    '\\n\\nWrite company research as markdown with exactly these three sections, in this order. Output only the sections and their content, no preamble or closing remarks.\\n\\n## Company Overview\\n[What the company does, its industry position, business model, and scale.]\\n\\n## Culture and Team Signals\\n[Signals about culture, team, and working style from the job listing and any dossier data.]\\n\\n## Strategic Importance of ' + job.title + ' Role\\n[Why this specific role matters strategically at this company right now.]\\n\\nIncorporate dossier data where available; fall back to job description signals. Each section should be one focused paragraph.',\n    700);\n\n  var g2 = await generate(\n    'You are an expert resume writer. Tailor resumes to specific job descriptions while maintaining complete factual accuracy. Match vocabulary and emphasize relevant experience.',\n    'JOB: ' + job.title + ' at ' + job.company +\n    '\\n\\nJOB DESCRIPTION:\\n' + jd +\n    dossierCtx +\n    '\\n\\n---\\n\\nMY RESUME:\\n' + res +\n    '\\n\\n---\\n\\nRewrite my resume tailored for this role. Use the exact vocabulary from the job description. Where culture signals are available in the dossier, align framing accordingly. Lead with the most relevant experience. Preserve all facts - do not invent anything. Format as clean Markdown with clear sections.',\n    3000);\n\n  var g3 = await generate(\n    'You are an expert cover letter writer. Create compelling, authentic letters. Professional but human tone. No buzzwords: no \"synergy\", \"passionate\", \"leverage\", \"excited to join\", \"touch base\".',\n    'Role: ' + job.title + ' at ' + job.company + '\\nLocation: ' + (job.location || '') +\n    '\\n\\nJob description:\\n' + jd.slice(0, 2000) +\n    dossierCtx +\n    '\\n\\nMy background:\\n' + res.slice(0, 2500) +\n    '\\n\\nFit analysis: ' + (job.fitReasoning || '') +\n    '\\nKey matches: ' + (job.fitMatches || []).join(', ') +\n    '\\n\\nWrite a cover letter (3-4 paragraphs). Address \"Dear Hiring Manager,\" unless a specific name appears in the listing. Open by connecting my specific background to this specific role. If dossier data is available, weave in a specific detail about the company (recent news, stage, culture) to show genuine research. Highlight 2-3 accomplishments that map to job requirements. Close with a confident, specific call to action.',\n    1200);\n\n  var folderName = company + ' - ' + title;\n  var jobNote =\n    '---\\n' +\n    'date: ' + today + '\\n' +\n    'title: ' + job.title + '\\n' +\n    'company: ' + job.company + '\\n' +\n    'type: \"job posting\"\\n' +\n    'source: ' + (job.source || 'auto-search') + '\\n' +\n    'match-score: ' + (job.fitScore || 0) + '\\n' +\n    'url: ' + (job.linkedinUrl || '') + '\\n' +\n    'active: true\\n' +\n    'application: false\\n' +\n    'status: in-progress\\n' +\n    (dossier ?\n      'industry: '     + (dossier.industry || '') + '\\n' +\n      'companySize: '  + (dossier.size     || '') + '\\n' +\n      'companyStage: ' + (dossier.stage    || '') + '\\n' : '') +\n    '---\\n\\n' +\n    '# ' + job.title + ' - ' + job.company + '\\n\\n' +\n    '| Field | Value |\\n|---|---|\\n' +\n    '| Location | '   + (job.location || '') + ' |\\n' +\n    '| Discovered | ' + today + ' |\\n' +\n    '| Fit Score | '  + (job.fitScore || 0) + '/100 |\\n' +\n    '| Source | '     + (job.source || 'auto-search') + ' |\\n' +\n    (dossier ?\n      '| Industry | '     + (dossier.industry || '') + ' |\\n' +\n      '| Company Size | ' + (dossier.size     || '') + ' |\\n' +\n      '| Stage | '        + (dossier.stage    || '') + ' |\\n' : '') +\n    '\\n## Fit Analysis\\n\\n' + (job.fitReasoning || '') + '\\n\\n' +\n    '**Key Matches:** ' + (job.fitMatches || []).join(', ') + '\\n\\n' +\n    '**Gaps:** '        + (job.fitGaps    || []).join(', ') + '\\n\\n' +\n    '## Job Description\\n\\n' + (job.description || '') + '\\n';\n\n  return {\n    status:     'success',\n    jobId:      job.jobId,\n    company:    job.company,\n    title:      job.title,\n    fitScore:   job.fitScore,\n    outputFolder: folderName,\n    clippingFile: job.clippingFile || null,\n    source:       job.source || 'auto-search',\n    dossierSource: dossier ? (dossier.dataSourced || []).join(', ') : 'none',\n    generationModels: { research: g1.model, tailoredResume: g2.model, coverLetter: g3.model },\n    generated: {\n      research:    g1.text,\n      resume:      '# Resume - ' + job.title + ' at ' + job.company + '\\n\\n*Tailored: ' + today + ' | Fit: ' + (job.fitScore || 0) + '/100*\\n\\n---\\n\\n' + g2.text,\n      coverLetter: '# Cover Letter - ' + job.title + ' at ' + job.company + '\\n\\n' + today + '\\n\\n---\\n\\n' + g3.text,\n      jobNote:     jobNote\n    },\n    paths: {\n      obsidianJobNote:         'Companies/Research/' + company + '/Jobs/' + title + '.md',\n      obsidianCompanyResearch: 'Companies/Research/' + company + '/Company Research.md',\n      localFolder:             '/jobhunt/research/' + folderName,\n      localResume:             '/jobhunt/research/' + folderName + '/Resume.md',\n      localCoverLetter:        '/jobhunt/research/' + folderName + '/Cover Letter.md'\n    }\n  };\n}\n\n// \u2500\u2500 Main: single job from Redis queue \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nvar rawValue = $input.first().json.propertyName;\nif (!rawValue) {\n  return [{ json: { total: 1, succeeded: 0, skipped: 0, failed: 1,\n    results: [{ status: 'error', error: 'Empty value from Redis pop' }],\n    processedAt: new Date().toISOString() } }];\n}\n\nvar job;\ntry { job = typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue; }\ncatch(e) {\n  return [{ json: { total: 1, succeeded: 0, skipped: 0, failed: 1,\n    results: [{ status: 'error', error: 'JSON parse failed: ' + e.message }],\n    processedAt: new Date().toISOString() } }];\n}\n\nvar log = {};\ntry { if (fs.existsSync(LOG_FILE)) log = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8')); } catch(e) {}\n\nif (log[job.jobId] && log[job.jobId].status === 'processed') {\n  return [{ json: {\n    total: 1, succeeded: 0, skipped: 1, failed: 0,\n    results: [{ status: 'skipped', jobId: job.jobId, reason: 'already_processed' }],\n    processedAt: new Date().toISOString() } }];\n}\n\ntry {\n  var result = await processJob(job);\n  log[job.jobId] = {\n    jobId: job.jobId, title: job.title, company: job.company,\n    location: job.location || '', url: job.linkedinUrl || '',\n    source: job.source || 'auto-search',\n    fitScore: job.fitScore || 0,\n    processedAt: new Date().toISOString(), status: 'processed',\n    outputFolder: result.outputFolder\n  };\n  fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2), 'utf8');\n  return [{ json: {\n    total: 1, succeeded: 1, skipped: 0, failed: 0,\n    results: [result],\n    processedAt: new Date().toISOString() } }];\n} catch(e) {\n  log[job.jobId] = {\n    jobId: job.jobId || 'unknown', title: job.title || 'unknown',\n    company: job.company || 'unknown',\n    processedAt: new Date().toISOString(), status: 'error', error: e.message\n  };\n  fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2), 'utf8');\n  return [{ json: {\n    total: 1, succeeded: 0, skipped: 0, failed: 1,\n    results: [{ status: 'error', jobId: job.jobId, company: job.company || '', error: e.message }],\n    processedAt: new Date().toISOString() } }];\n}"
+        },
+        "id": "process-single-job",
+        "name": "Process Single Job",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          960,
+          160
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var http = require('http');\nvar fs   = require('fs');\n\nvar CONFIG_FILE = '/home/node/.n8n/ai-config.json';\n\nvar cfg = {};\ntry { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch(e) {}\n\nvar OBSIDIAN_HOST    = cfg.obsidian_host    || 'host.docker.internal';\nvar OBSIDIAN_PORT    = cfg.obsidian_port    || 27123;\nvar OBSIDIAN_API_KEY = cfg.obsidian_api_key || 'aa8bc927de7893c1417ecc185870d150e8555469993970ded92287c2295beed8';\n\nif (!OBSIDIAN_API_KEY) {\n  throw new Error('OBSIDIAN_API_KEY missing from ai-config.json');\n}\n\nfunction vaultPath(relativePath) {\n  return '/vault/' + relativePath.split('/').map(encodeURIComponent).join('/');\n}\n\nfunction obsidianRequest(method, relativePath, body) {\n  return new Promise(function(resolve, reject) {\n    var bodyBuf = body ? Buffer.from(body, 'utf8') : null;\n    var opts = {\n      hostname: OBSIDIAN_HOST, port: OBSIDIAN_PORT,\n      path: vaultPath(relativePath), method: method,\n      headers: { 'Authorization': 'Bearer ' + OBSIDIAN_API_KEY }\n    };\n    if (bodyBuf) {\n      opts.headers['Content-Type'] = 'text/markdown';\n      opts.headers['Content-Length'] = bodyBuf.length;\n    }\n    var req = http.request(opts, function(res) {\n      var chunks = [];\n      res.on('data', function(d) { chunks.push(d.toString()); });\n      res.on('end',  function() { resolve({ status: res.statusCode, text: chunks.join('') }); });\n    });\n    req.on('error', reject);\n    if (bodyBuf) req.write(bodyBuf);\n    req.end();\n  });\n}\n\nfunction mergeFrontmatter(content, additions) {\n  var fmMatch = content.match(/^---\\r?\\n([\\s\\S]*?)\\r?\\n---(\\r?\\n)/);\n  if (!fmMatch) {\n    var block = '---\\n';\n    var aKeys = Object.keys(additions);\n    for (var a = 0; a < aKeys.length; a++) { block += aKeys[a] + ': ' + additions[aKeys[a]] + '\\n'; }\n    block += '---\\n\\n';\n    return block + content;\n  }\n  var fmLines  = fmMatch[1];\n  var bodyPart = content.slice(fmMatch[0].length);\n  var aKeys    = Object.keys(additions);\n  for (var a = 0; a < aKeys.length; a++) {\n    var key = aKeys[a]; var val = String(additions[key]);\n    var re = new RegExp('(^|\\\\n)(' + key.replace(/-/g, '\\\\-') + '\\\\s*:.*)');\n    if (re.test(fmLines)) {\n      fmLines = fmLines.replace(re, function(m, prefix) { return prefix + key + ': ' + val; });\n    } else { fmLines = fmLines + '\\n' + key + ': ' + val; }\n  }\n  return '---\\n' + fmLines + '\\n---\\n' + bodyPart;\n}\n\nvar input   = $input.first().json;\nvar results = input.results || [];\nvar writes  = [];\nvar today   = new Date().toISOString().slice(0, 10);\n\nfor (var i = 0; i < results.length; i++) {\n  var result = results[i];\n  if (result.status !== 'success' || !result.generated || !result.paths) continue;\n  try {\n    if (result.clippingFile) {\n      var clippingVaultPath = 'Clippings/' + result.clippingFile;\n      var getRes = await obsidianRequest('GET', clippingVaultPath);\n      if (getRes.status !== 200) {\n        writes.push({ file: clippingVaultPath, action: 'GET', http: getRes.status, error: 'fallback to fresh' });\n        var fallRes = await obsidianRequest('PUT', result.paths.obsidianJobNote, result.generated.jobNote);\n        writes.push({ file: result.paths.obsidianJobNote, action: 'PUT (fallback)', http: fallRes.status });\n      } else {\n        var enriched = mergeFrontmatter(getRes.text, { 'match-score': result.fitScore || 100, status: 'in-progress', processed: today });\n        var sections = '\\n\\n---\\n\\n## Company Research\\n\\n' + result.generated.research + '\\n\\n## Tailored Resume\\n\\n' + result.generated.resume + '\\n\\n## Cover Letter\\n\\n' + result.generated.coverLetter + '\\n';\n        var putRes = await obsidianRequest('PUT', result.paths.obsidianJobNote, enriched + sections);\n        writes.push({ file: result.paths.obsidianJobNote, action: 'PUT (from clipping)', http: putRes.status });\n        if (putRes.status >= 200 && putRes.status < 300) {\n          var delRes = await obsidianRequest('DELETE', clippingVaultPath);\n          writes.push({ file: clippingVaultPath, action: 'DELETE', http: delRes.status });\n        }\n      }\n    } else {\n      var noteRes = await obsidianRequest('PUT', result.paths.obsidianJobNote, result.generated.jobNote);\n      writes.push({ file: result.paths.obsidianJobNote, action: 'PUT', http: noteRes.status });\n    }\n    var existRes = await obsidianRequest('GET', result.paths.obsidianCompanyResearch);\n    if (existRes.status === 200) {\n      var appendText = '\\n\\n---\\n\\n## Update: ' + today + ' (' + result.title + ')\\n\\n' + result.generated.research;\n      var appendRes = await obsidianRequest('POST', result.paths.obsidianCompanyResearch, appendText);\n      writes.push({ file: result.paths.obsidianCompanyResearch, action: 'POST (append)', http: appendRes.status });\n    } else {\n      var freshText = '---\\ndate: ' + today + '\\ntitle: ' + result.company + '\\ncompany: ' + result.company + '\\ntype: Company Research\\n---\\n\\n# [[' + result.company + ']]\\n\\n' + result.generated.research + '\\n\\n---\\n*First researched: ' + today + ' (' + result.title + ')*\\n';\n      var createRes = await obsidianRequest('PUT', result.paths.obsidianCompanyResearch, freshText);\n      writes.push({ file: result.paths.obsidianCompanyResearch, action: 'PUT (new)', http: createRes.status });\n    }\n  } catch(e) { writes.push({ company: result.company, error: e.message }); }\n}\n\nvar output = {};\nvar keys = Object.keys(input);\nfor (var k = 0; k < keys.length; k++) { output[keys[k]] = input[keys[k]]; }\noutput.obsidianWrites = writes;\nreturn [{ json: output }];"
+        },
+        "id": "write-obsidian",
+        "name": "Write Obsidian Notes",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1200,
+          160
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "var fs = require('fs');\n\nfunction ensureDir(d) {\n  var parts = d.split('/');\n  var cur = '';\n  for (var i = 0; i < parts.length; i++) {\n    if (!parts[i]) { cur = '/'; continue; }\n    cur = (cur === '/' ? '/' : cur + '/') + parts[i];\n    try { fs.mkdirSync(cur); } catch(e) { if (e.code !== 'EEXIST') throw e; }\n  }\n}\n\nvar input   = $input.first().json;\nvar results = input.results || [];\nvar writes  = [];\n\nfor (var i = 0; i < results.length; i++) {\n  var result = results[i];\n  if (result.status !== 'success' || !result.generated || !result.paths) continue;\n  try {\n    ensureDir(result.paths.localFolder);\n    fs.writeFileSync(result.paths.localResume, result.generated.resume, 'utf8');\n    fs.writeFileSync(result.paths.localCoverLetter, result.generated.coverLetter, 'utf8');\n    writes.push({ folder: result.outputFolder, status: 'written' });\n  } catch(e) { writes.push({ folder: result.outputFolder || result.company, error: e.message }); }\n}\n\nvar output = {};\nvar keys = Object.keys(input);\nfor (var k = 0; k < keys.length; k++) { output[keys[k]] = input[keys[k]]; }\noutput.localWrites = writes;\nreturn [{ json: output }];\n"
+        },
+        "id": "write-files",
+        "name": "Write Job Hunt Files",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1440,
+          160
+        ]
+      },
+      {
+        "parameters": {
+          "select": "channel",
+          "channelId": {
+            "__rl": true,
+            "value": "C0AHBLP6N02",
+            "mode": "list",
+            "cachedResultName": "job-research"
+          },
+          "text": "={{ '*Job Processed* \\u2014 ' + (($json.results || [])[0] ? (($json.results[0].status === 'success' ? '*' + $json.results[0].title + '* at _' + $json.results[0].company + '_ \\u2014 *' + $json.results[0].fitScore + '%* fit' : ($json.results[0].status === 'skipped' ? '~' + ($json.results[0].jobId||'') + '~ _(already processed)_' : '\\u26a0\\ufe0f Error: ' + ($json.results[0].company||'') + ': ' + $json.results[0].error))) : '_no result_') }}",
+          "otherOptions": {}
+        },
+        "id": "send-slack",
+        "name": "Send Slack Notification",
+        "type": "n8n-nodes-base.slack",
+        "typeVersion": 2.1,
+        "position": [
+          1600,
+          448
+        ],
+        "webhookId": "2ac05bce-d5e6-49e2-b48b-d1d9d9ceae03",
+        "credentials": {
+          "slackApi": {
+            "id": "s5pyniaybSCztmFC",
+            "name": "Slack account"
+          }
+        }
+      },
+      {
+        "parameters": {},
+        "id": "queue-empty",
+        "name": "Queue Empty",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          960,
+          464
+        ]
+      }
+    ],
+    "connections": {
+      "Schedule Trigger": {
+        "main": [
+          [
+            {
+              "node": "Loop Control",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Loop Control": {
+        "main": [
+          [
+            {
+              "node": "Pop from Queue",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Pop from Queue": {
+        "main": [
+          [
+            {
+              "node": "Has Job?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Has Job?": {
+        "main": [
+          [
+            {
+              "node": "Process Single Job",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Queue Empty",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Process Single Job": {
+        "main": [
+          [
+            {
+              "node": "Write Obsidian Notes",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Write Obsidian Notes": {
+        "main": [
+          [
+            {
+              "node": "Write Job Hunt Files",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Write Job Hunt Files": {
+        "main": [
+          [
+            {
+              "node": "Send Slack Notification",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Send Slack Notification": {
+        "main": [
+          [
+            {
+              "node": "Loop Control",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Chuck Charbeneau",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-03-10T14:39:55.374Z",
+        "id": 93,
+        "workflowId": "casAd11FesXbMLnG",
+        "versionId": "7dd642e5-60d5-4f11-9ad4-c564cececc98",
+        "event": "activated",
+        "userId": "79bb8800-b446-4185-b3fb-303ebc8909eb"
+      },
+      {
+        "createdAt": "2026-03-10T14:39:55.357Z",
+        "id": 92,
+        "workflowId": "casAd11FesXbMLnG",
+        "versionId": "7dd642e5-60d5-4f11-9ad4-c564cececc98",
+        "event": "deactivated",
+        "userId": "79bb8800-b446-4185-b3fb-303ebc8909eb"
+      }
+    ]
+  }
+}

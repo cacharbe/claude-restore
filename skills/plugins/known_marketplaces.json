@@ -1,0 +1,10 @@
+{
+  "knowledge-work-plugins": {
+    "source": {
+      "source": "github",
+      "repo": "anthropics/knowledge-work-plugins"
+    },
+    "installLocation": "C:/Users/cacha/AppData/Roaming/Claude/local-agent-mode-sessions/332a48cc-ad94-4ea4-96fb-fac5bb173a18/b7a13d98-d1b9-4fbf-83f7-f85af554026c/cowork_plugins/marketplaces/knowledge-work-plugins",
+    "lastUpdated": "2026-03-07T16:19:27.251Z"
+  }
+}

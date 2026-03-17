@@ -5,6 +5,10 @@ claude-config/n8n/ai-config.json
 # Keep folder structure
 !**/.gitkeep
 
+# Marketplace cache has its own git repo -- exclude to avoid nested repo issues
+# It gets re-downloaded on fresh install, no need to back it up
+skills/plugins/marketplaces/
+
 # OS junk
 .DS_Store
 Thumbs.db

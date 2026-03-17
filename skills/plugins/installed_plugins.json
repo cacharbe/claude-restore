@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "plugins": {
+    "cowork-plugin-management@knowledge-work-plugins": [
+      {
+        "scope": "user",
+        "installPath": "C:/Users/cacha/AppData/Roaming/Claude/local-agent-mode-sessions/332a48cc-ad94-4ea4-96fb-fac5bb173a18/b7a13d98-d1b9-4fbf-83f7-f85af554026c/cowork_plugins/cache/knowledge-work-plugins/cowork-plugin-management/0.2.2",
+        "version": "0.2.2",
+        "installedAt": "2026-03-11T19:13:37.364Z",
+        "lastUpdated": "2026-03-11T19:13:37.364Z",
+        "gitCommitSha": "477c893b7a63f9ee021d2ccd55d89afd1c4b7c03"
+      }
+    ]
+  }
+}
